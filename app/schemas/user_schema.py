@@ -1,6 +1,5 @@
 from enum import Enum
-
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserRole(str, Enum):
@@ -10,14 +9,14 @@ class UserRole(str, Enum):
 
 
 class UserCreate(BaseModel):
-    name: str = Field(min_length=3)
+    name: str = Field(..., min_length=3, description="Nombre del usuario (mínimo 3 caracteres)")
     email: EmailStr
     role: UserRole
-    is_active: bool
+    is_active: bool = True
 
 
 class UserUpdate(BaseModel):
-    name: str = Field(min_length=3)
+    name: str = Field(..., min_length=3)
     email: EmailStr
     role: UserRole
     is_active: bool
@@ -36,3 +35,5 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: UserRole
     is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
