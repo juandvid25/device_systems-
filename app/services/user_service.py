@@ -1,110 +1,91 @@
-from fastapi import HTTPException, status
-
-from app.data.users_db import users_db
-from app.schemas.user_schema import UserCreate, UserPatch, UserUpdate, UserResponse
-
-
-def get_users(role=None, is_active=None):
-    users = users_db
-
-    if role is not None:
-        users = [user for user in users if user.role == role]
-
-    if is_active is not None:
-        users = [user for user in users if user.is_active == is_active]
-
-    return users
+from sqlalchemy.orm import Session
+from app.models.user_model import User
+from app.schemas.user_schema import UserCreate, UserUpdate, UserPatch
 
 
-def create_user(user: UserCreate) -> UserResponse:
-    existing_user = next(
-        (existing for existing in users_db if existing.email == user.email),
-        None
+def create_user(db: Session, user_data: UserCreate) -> User:
+    user = User(
+        name=user_data.name,
+        email=user_data.email,
+        role=user_data.role.value if hasattr(user_data.role, 'value') else user_data.role,
+        is_active=user_data.is_active,
     )
-
-    if existing_user is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El correo electrónico ya está registrado"
-        )
-
-    new_id = max((existing.id for existing in users_db), default=0) + 1
-
-    new_user = UserResponse(
-        id=new_id,
-        **user.model_dump()
-    )
-
-    users_db.append(new_user)
-
-    return new_user
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
-def update_user(
-    existing_user: UserResponse,
-    user: UserUpdate
-) -> UserResponse:
-
-    email_exists = next(
-        (
-            user_db
-            for user_db in users_db
-            if user_db.email == user.email
-            and user_db.id != existing_user.id
-        ),
-        None
-    )
-
-    if email_exists is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El correo electrónico ya está registrado"
-        )
-
-    existing_user.name = user.name
-    existing_user.email = user.email
-    existing_user.role = user.role
-    existing_user.is_active = user.is_active
-
-    return existing_user
+def get_users(db: Session) -> list[User]:
+    return db.query(User).all()
 
 
-def patch_user(
-    existing_user: UserResponse,
-    user: UserPatch
-) -> UserResponse:
-
-    update_data = user.model_dump(exclude_unset=True)
-
-    if not update_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Debe enviar al menos un campo para actualizar"
-        )
-
-    if "email" in update_data:
-
-        email_exists = next(
-            (
-                user_db
-                for user_db in users_db
-                if user_db.email == update_data["email"]
-                and user_db.id != existing_user.id
-            ),
-            None
-        )
-
-        if email_exists is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El correo electrónico ya está registrado"
-            )
-
-    for field, value in update_data.items():
-        setattr(existing_user, field, value)
-
-    return existing_user
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.query(User).filter(User.id == user_id).first()
 
 
-def delete_user(existing_user: UserResponse) -> None:
-    users_db.remove(existing_user)
+def get_user_by_email(db: Session, email: str) -> User | None:
+    return db.query(User).filter(User.email == email).first()
+
+
+def update_user(db: Session, user_id: int, user_data: UserUpdate) -> User | None:
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        return None
+
+    user.name = user_data.name
+    user.email = user_data.email
+    user.role = user_data.role.value if hasattr(user_data.role, 'value') else user_data.role
+    user.is_active = user_data.is_active
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def patch_user(db: Session, user_id: int, user_data: UserPatch) -> User | None:
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        return None
+
+    data = user_data.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        if field == "role" and value is not None and hasattr(value, 'value'):
+            value = value.value
+        setattr(user, field, value)
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def delete_user(db: Session, user_id: int) -> bool:
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        return False
+
+    db.delete(user)
+    db.commit()
+    return True
+
+
+def get_users_by_role(db: Session, role: str) -> list[User]:
+    return db.query(User).filter(User.role == role).all()
+
+
+def get_users_by_status(db: Session, is_active: bool) -> list[User]:
+    return db.query(User).filter(User.is_active == is_active).all()
+
+
+def get_users_ordered(db: Session, order_by: str = "name", descending: bool = False) -> list[User]:
+    if order_by == "created_at":
+        column = User.created_at
+    else:
+        column = User.name
+
+    if descending:
+        column = column.desc()
+    else:
+        column = column.asc()
+
+    return db.query(User).order_by(column).all()
