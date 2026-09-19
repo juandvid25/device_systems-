@@ -1,10 +1,9 @@
-@"
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Entorno virtual
+# Entornos virtuales
 venv/
 .venv/
 env/
@@ -18,4 +17,11 @@ env/
 
 # VS Code
 .vscode/
-"@ | Out-File -Encoding utf8 .gitignore
+
+# Archivos de pruebas
+.pytest_cache/
+.coverage
+htmlcov/
+
+# FastAPI
+*.log

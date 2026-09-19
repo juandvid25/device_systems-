@@ -1,6 +1,19 @@
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
-from app.schemas.user_schema import UserCreate, UserResponse, UserRole
+from app.dependencies.database_dependency import get_db
+
+from app.schemas.user_schema import (
+    UserCreate,
+    UserUpdate,
+    UserPatch,
+    UserResponse,
+    UserRole
+)
+
+from app.schemas.loan_schema import LoanDetailCustomResponse
+
+from app.services import user_service, loan_service
 
 
 router = APIRouter(
@@ -9,124 +22,296 @@ router = APIRouter(
 )
 
 
-# Base de datos temporal en memoria
-users_db = [
-    UserResponse(
-        id=1,
-        name="Juan David",
-        email="juan@gmail.com",
-        role=UserRole.USER,
-        is_active=True
-    ),
-    UserResponse(
-        id=2,
-        name="Maria Lopez",
-        email="maria@gmail.com",
-        role=UserRole.ADMIN,
-        is_active=True
-    ),
-    UserResponse(
-        id=3,
-        name="Carlos Perez",
-        email="carlos@gmail.com",
-        role=UserRole.SUPPORT,
-        is_active=False
+# ============================================================
+# LISTAR USUARIOS
+# ============================================================
+
+@router.get(
+    "/",
+    response_model=list[UserResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Listar usuarios",
+    description=(
+        "Lista los usuarios permitiendo "
+        "filtros por rol, estado y ordenamiento."
     )
-]
-
-
-# ==========================================================
-# GET /users
-# Obtener todos los usuarios y aplicar filtros
-# ==========================================================
-
-@router.get("", response_model=list[UserResponse])
+)
 def get_users(
-    role: UserRole | None = Query(default=None),
-    is_active: bool | None = Query(default=None)
+    role: UserRole | None = Query(
+        default=None,
+        description="Filtrar por rol"
+    ),
+    is_active: bool | None = Query(
+        default=None,
+        description="Filtrar por estado activo/inactivo"
+    ),
+    order_by: str | None = Query(
+        default=None,
+        description=(
+            "Ordenar por name o created_at"
+        )
+    ),
+    descending: bool = Query(
+        default=False,
+        description="Orden descendente"
+    ),
+    db: Session = Depends(get_db)
 ):
-    users = users_db
 
-    # Filtrar por rol
     if role is not None:
-        users = [
-            user for user in users
-            if user.role == role
-        ]
 
-    # Filtrar por estado
+        return user_service.get_users_by_role(
+            db,
+            role.value
+        )
+
     if is_active is not None:
-        users = [
-            user for user in users
-            if user.is_active == is_active
-        ]
 
-    return users
+        return user_service.get_users_by_status(
+            db,
+            is_active
+        )
+
+    if order_by is not None:
+
+        return user_service.get_users_ordered(
+            db,
+            order_by=order_by,
+            descending=descending
+        )
+
+    return user_service.get_users(db)
 
 
-# ==========================================================
-# GET /users/{user_id}
-# Obtener un usuario por ID
-# ==========================================================
+# ============================================================
+# PRÉSTAMOS DE UN USUARIO
+# ============================================================
 
-@router.get("/{user_id}", response_model=UserResponse)
-def get_user(user_id: int):
+@router.get(
+    "/{user_id}/loans",
+    response_model=list[LoanDetailCustomResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Obtener préstamos de un usuario",
+    description=(
+        "Obtiene todos los préstamos realizados "
+        "por un usuario."
+    )
+)
+def get_user_loans(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
 
-    user = next(
-        (user for user in users_db if user.id == user_id),
-        None
+    return loan_service.get_loans_by_user_id(
+        db,
+        user_id
+    )
+
+
+# ============================================================
+# OBTENER USUARIO POR ID
+# ============================================================
+
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Obtener usuario",
+    description="Obtiene un usuario mediante su ID."
+)
+def get_user(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+
+    user = user_service.get_user_by_id(
+        db,
+        user_id
     )
 
     if user is None:
+
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Usuario no encontrado"
         )
 
     return user
 
 
-# ==========================================================
-# POST /users
-# Crear un nuevo usuario
-# ==========================================================
+# ============================================================
+# CREAR USUARIO
+# ============================================================
 
 @router.post(
-    "",
+    "/",
     response_model=UserResponse,
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear usuario",
+    description=(
+        "Crea un nuevo usuario verificando "
+        "que el correo no esté registrado."
+    )
 )
-def create_user(user: UserCreate):
+def create_user(
+    user_data: UserCreate,
+    db: Session = Depends(get_db)
+):
 
-    # Verificar si el correo ya existe
-    existing_user = next(
-        (
-            existing
-            for existing in users_db
-            if existing.email == user.email
-        ),
-        None
+    existing_user = user_service.get_user_by_email(
+        db,
+        user_data.email
     )
 
-    if existing_user is not None:
+    if existing_user:
+
         raise HTTPException(
-            status_code=409,
-            detail="El correo electrónico ya está registrado"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El email ya está registrado"
         )
 
-    # Generar nuevo ID
-    new_id = max(
-        (existing.id for existing in users_db),
-        default=0
-    ) + 1
-
-    # Crear usuario
-    new_user = UserResponse(
-        id=new_id,
-        **user.model_dump()
+    return user_service.create_user(
+        db,
+        user_data
     )
 
-    # Guardar usuario
-    users_db.append(new_user)
 
-    return new_user
+# ============================================================
+# ACTUALIZAR USUARIO
+# ============================================================
+
+@router.put(
+    "/{user_id}",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Actualizar usuario"
+)
+def update_user(
+    user_id: int,
+    user_data: UserUpdate,
+    db: Session = Depends(get_db)
+):
+
+    existing_user = user_service.get_user_by_id(
+        db,
+        user_id
+    )
+
+    if existing_user is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuario no encontrado"
+        )
+
+    user_with_email = user_service.get_user_by_email(
+        db,
+        user_data.email
+    )
+
+    if (
+        user_with_email
+        and user_with_email.id != user_id
+    ):
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "El email ya está registrado "
+                "por otro usuario"
+            )
+        )
+
+    return user_service.update_user(
+        db,
+        user_id,
+        user_data
+    )
+
+
+# ============================================================
+# ACTUALIZACIÓN PARCIAL
+# ============================================================
+
+@router.patch(
+    "/{user_id}",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Actualizar parcialmente usuario"
+)
+def patch_user(
+    user_id: int,
+    user_data: UserPatch,
+    db: Session = Depends(get_db)
+):
+
+    existing_user = user_service.get_user_by_id(
+        db,
+        user_id
+    )
+
+    if existing_user is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuario no encontrado"
+        )
+
+    if user_data.email is not None:
+
+        user_with_email = (
+            user_service.get_user_by_email(
+                db,
+                user_data.email
+            )
+        )
+
+        if (
+            user_with_email
+            and user_with_email.id != user_id
+        ):
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "El email ya está registrado "
+                    "por otro usuario"
+                )
+            )
+
+    return user_service.patch_user(
+        db,
+        user_id,
+        user_data
+    )
+
+
+# ============================================================
+# ELIMINAR USUARIO
+# ============================================================
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Eliminar usuario"
+)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+
+    deleted = user_service.delete_user(
+        db,
+        user_id
+    )
+
+    if not deleted:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuario no encontrado"
+        )
+
+    return {
+        "message": "Usuario eliminado correctamente"
+    }
